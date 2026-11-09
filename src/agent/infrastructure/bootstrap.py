@@ -33,13 +33,14 @@ def build_chat_model(foundry: FoundrySettings) -> ChatModel:
         max_retries=foundry.max_retries,
     )
 
-
+#JP-CONVERSACIONAL-8 Arranque y configuración (opcional, para ver qué se inyecta): bootstrap.py
+#create_app: aquí se arma ChatService con el prompt de fraud.md, el max_turns y el almacén.
 def create_app(chat_model: ChatModel | None = None, settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings()
     chat_service = ChatService(
         model=chat_model or build_chat_model(settings.foundry),
         store=InMemoryConversationStore(),
-        system_prompt=load_prompt(settings.domain),
+        system_prompt=load_prompt(settings.domain), #JP- CARGO DOMINIO
         max_turns=settings.max_turns,
     )
     app = FastAPI(title=f"agent-{settings.domain}")

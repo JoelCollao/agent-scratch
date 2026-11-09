@@ -4,6 +4,8 @@ uv run python dev/chat.py            conversación: escribe tus mensajes; "nueva
 uv run python dev/chat.py "Hola"     un solo mensaje y termina
 
 AGENT_URL cambia la dirección del agente (por defecto http://127.0.0.1:8000).
+En terminal, el usuario aparece en cyan y el agente en verde; al redirigir la salida no se usan colores.
+La latencia aparece en amarillo, los tokens de entrada en naranja y los de salida en morado claro.
 """
 
 import json
@@ -13,6 +15,12 @@ import urllib.error
 import urllib.request
 
 URL = os.environ.get("AGENT_URL", "http://127.0.0.1:8000").rstrip("/") + "/chat"
+CYAN = "\033[96m" if sys.stdout.isatty() else ""
+GREEN = "\033[92m" if sys.stdout.isatty() else ""
+YELLOW = "\033[93m" if sys.stdout.isatty() else ""
+ORANGE = "\033[38;2;255;165;0m" if sys.stdout.isatty() else ""
+LIGHT_PURPLE = "\033[38;2;190;150;255m" if sys.stdout.isatty() else ""
+RESET = "\033[0m" if sys.stdout.isatty() else ""
 
 
 def send(message: str, session_id: str | None) -> tuple[int, dict]:
@@ -27,12 +35,16 @@ def send(message: str, session_id: str | None) -> tuple[int, dict]:
         sys.exit(f"No hay agente en {URL}. ¿Lo levantaste con uvicorn en otra terminal?")
 
 
-def show(status: int, reply: dict) -> str | None:
+def show(status: int, reply: dict) -> str | None: #JP-FLUJO-CONVERSACION CHAT --> 1 Cliente: aquí lees tu mensaje con input
     """Imprime la respuesta y devuelve el session_id para el siguiente turno."""
     if status == 200:
-        print(f"  Agente [{reply['intent']}]: {reply['answer']}")
+        print(f"{GREEN}  Agente [{reply['intent']}]: {reply['answer']}{RESET}")
         if usage := reply.get("usage"):
-            print(f"  ({usage['latency_ms']} ms, {usage['prompt_tokens']} tokens de entrada, {usage['completion_tokens']} de salida)")
+            print(
+                f"  ({YELLOW}{usage['latency_ms']} ms{RESET}, "
+                f"{ORANGE}{usage['prompt_tokens']} tokens de entrada{RESET}, "
+                f"{LIGHT_PURPLE}{usage['completion_tokens']} de salida{RESET})"
+            ) #JP-SE MUESTRA LO QUE USAGE CAPTURO latencia , token entrada y token de salida
         return reply["session_id"]
     detail = reply.get("detail")
     if isinstance(detail, list):  # 422: FastAPI explica qué campo no pasó la validación
@@ -50,7 +62,11 @@ def main() -> None:
     session_id = None
     while True:
         try:
-            message = input("Tú: ")
+            try:
+                print(CYAN, end="", flush=True)
+                message = input("Tú: ")
+            finally:
+                print(RESET, end="", flush=True)
         except (EOFError, KeyboardInterrupt):
             break
         if message.strip().lower() == "salir":

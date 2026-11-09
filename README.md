@@ -66,3 +66,11 @@ devops/              contenedor y compose
 ```
 
 Las dependencias van `infrastructure → application → domain`, nunca al revés.
+
+-- Subida cambios
+git status
+git diff                  # Revisa los cambios
+git add .
+git diff --cached         # Revisa lo que vas a guardar
+git commit -m "feat: sesión 2 - historial, errores tipados y usage contra Foundry"
+git push
