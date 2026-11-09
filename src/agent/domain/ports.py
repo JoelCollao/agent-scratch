@@ -2,15 +2,14 @@
 
 from typing import Protocol
 
-from agent.domain.models import Message
+from agent.domain.knowledge import Chunk
+from agent.domain.models import Message, ModelResult
 
 
 class ChatModel(Protocol):
     """Modelo de lenguaje. T1: Foundry directo; T3: Microsoft Agent Framework."""
 
-    # TODO S1: tipar el retorno: AgentReply
-    # TODO S2: ModelResult (respuesta tipada + consumo de la llamada)
-    def complete(self, messages: list[Message]): ...
+    def complete(self, messages: list[Message]) -> ModelResult: ...
 
 
 class ConversationStore(Protocol):
@@ -18,3 +17,19 @@ class ConversationStore(Protocol):
 
     def get(self, session_id: str) -> list[Message]: ...
     def append(self, session_id: str, message: Message) -> None: ...
+
+
+class Embedder(Protocol): #JP-S3 - RECIBE UN LISTA DE TEXTO Y DEVUELVE UN LISTA DE VECTORES UNO POR TEXTO.
+    """Texto → vector. T2: Foundry text-embedding-3-small."""
+
+    def embed(self, texts: list[str]) -> list[list[float]]: ...
+
+
+class KnowledgeBase(Protocol):
+    """Índice de conocimiento. S3: Qdrant en modo local; S5: Azure AI Search."""
+
+    def publish(self, chunks: list[Chunk]) -> None:
+        """Reemplaza todos los chunks de cada fuente publicada."""
+        ...
+
+    def count(self) -> int: ...
