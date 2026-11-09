@@ -18,7 +18,9 @@ from agent.infrastructure.llm.credentials import Credential
 
 log = logging.getLogger(__name__)
 
-
+#JP-S2- CONVERSACION - 6 - Llamada al modelo: foundry_chat_model.py
+#Método complete(messages): en la línea de chat.completions.parse(...) 
+#ves el request real. Luego revisa completion.choices[0].message.parsed para ver la respuesta ya validada y el objeto usage.
 class FoundryChatModel:
     """Implementa el puerto ChatModel contra Microsoft Foundry (API v1 compatible con OpenAI)."""
 
@@ -31,16 +33,19 @@ class FoundryChatModel:
         max_retries: int,
     ) -> None:
         # el SDK reintenta con backoff timeouts, 429 y 5xx; AgentError llega tras agotar reintentos
+        #donde se configura el cliente que hace los reintentos:
         self.client = OpenAI(
             base_url=f"{endpoint.rstrip('/')}/openai/v1/",
             api_key=credential,
             timeout=timeout_s,
-            max_retries=max_retries,
+            max_retries=max_retries, #JP El comportamiento viene del SDK de OpenAI-le indica cuántos reintentos hacer.
         )
         self.deployment = deployment
 
     def complete(self, messages: list[Message]) -> ModelResult:
+        log.info("messages enviados al modelo: %s", messages)
         start = time.perf_counter()
+        #JP
         try:
             completion = self.client.chat.completions.parse(
                 model=self.deployment, messages=messages, response_format=AgentReply
@@ -64,7 +69,12 @@ class FoundryChatModel:
         if message.parsed is None:
             raise AgentError(ErrorKind.INVALID_OUTPUT, f"el modelo no devolvió el contrato: {message.refusal or 'vacío'}")
 
+        #JP-VER LA INTENCION QUE LLEGA DEL PROMPT DEL CLIENTE
+        log.info("intencion detectada=%s | mensaje del cliente=%r", message.parsed.intent, messages[-1]["content"])
+        
         tokens = completion.usage
+        
+        #JP-usage es el registro de consumo de una llamada al modelo: cuántos tokens usó, cuánto tardó y qué modelo respondió. Viaja desde Foundry hasta tu cliente en chat.py.
         usage = Usage(
             models=[completion.model or self.deployment],
             llm_calls=1,
@@ -73,4 +83,4 @@ class FoundryChatModel:
             completion_tokens=tokens.completion_tokens if tokens else 0,
         )
         log.info("llm %s", usage.model_dump())
-        return ModelResult(reply=message.parsed, usage=usage)
+        return ModelResult(reply=message.parsed, usage=usage) #JP - Se empaqueta

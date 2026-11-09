@@ -25,7 +25,7 @@ async def agent_error_handler(request: Request, error: AgentError) -> JSONRespon
     return JSONResponse(status_code=ERROR_STATUS[error.kind], content=body.model_dump(mode="json"))
 
 
-def build_router(chat_service: ChatService) -> APIRouter:
+def build_router(chat_service: ChatService) -> APIRouter: #JP-FLUJO-CONVERSACION CHAT --> 2 Entrada HTTP: Función chat(chat_request): aquí se asigna el session_id  (o se crea uno con uuid4()) y se llama a chat_service.handle.
     router = APIRouter()
 
     @router.get("/health")
@@ -36,7 +36,7 @@ def build_router(chat_service: ChatService) -> APIRouter:
     def chat(chat_request: ChatRequest) -> ChatResponse:
         session_id = chat_request.session_id or uuid4()
         turn = chat_service.handle(str(session_id), chat_request.message)
-        return ChatResponse(
+        return ChatResponse( # Se expone en la API: routes.py, línea 40, lo pone en ChatResponse. El tipo está definido en schemas.py, línea 23.
             session_id=session_id, intent=turn.reply.intent, answer=turn.reply.answer, usage=turn.usage
         )
 

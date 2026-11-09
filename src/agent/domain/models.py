@@ -6,12 +6,12 @@ from pydantic import AfterValidator, BaseModel, ConfigDict, Field
 Message = dict[str, Any]  # formato OpenAI; T3 suma role "tool" sin cambiar el tipo
 
 
-class Intent(StrEnum):
+class Intent(StrEnum): #JP-INTENCION SEGUN LO QUE ENVIE EL PROMPT EL CLIENTE
     PRODUCT_QUESTION = "product_question"  # T2: RAG
     DATA_QUERY = "data_query"  # T3: tool MCP
     SENSITIVE_ACTION = "sensitive_action"  # T3: HITL
     GREETING = "greeting"
-    OUT_OF_SCOPE = "out_of_scope"
+    OUT_OF_SCOPE = "out_of_scope" #JP-SI NO ES DE DOMINIO RESPONDARE ASI  Ese valor es el que el modelo devuelve en el campo intent, y la API lo expone en la respuesta.
 
 
 def _not_blank(value: str) -> str:
@@ -33,6 +33,9 @@ class AgentReply(BaseModel):
     )
 
 
+#Usage hereda de BaseModel, la clase base de Pydantic. 
+#Eso significa que cada campo declarado se valida y 
+#se convierte al crear el objeto, y la clase puede serializarse a diccionario o JSON.
 class Usage(BaseModel):
     """Consumo de un turno. Es sumable porque desde T2 un turno hace varias llamadas al modelo."""
 
@@ -42,6 +45,10 @@ class Usage(BaseModel):
     prompt_tokens: int = 0
     completion_tokens: int = 0
 
+    #permite sumar dos Usage con +. La docstring dice que es para T2, cuando un turno haga varias llamadas 
+    #al modelo; por ejemplo, una llamada para clasificar y otra para responder. 
+    #Hoy cada turno hace una sola llamada, así que esa suma no se ejecuta en el flujo actual. 
+    #La línea dict.fromkeys(...) quita modelos repetidos y conserva el orden.
     def __add__(self, other: Self) -> Self:
         return type(self)(
             models=list(dict.fromkeys(self.models + other.models)),
