@@ -15,7 +15,7 @@ class SourceDocument(BaseModel):
 
 
 class Chunk(BaseModel):
-    """Unidad que se indexa. Es el mismo esquema que idx-team-11 en Azure AI Search."""
+    """Unidad que se indexa. Es el mismo esquema que idx-team-NN en Azure AI Search."""
 
     id: str
     content: str
@@ -26,3 +26,18 @@ class Chunk(BaseModel):
     valid_from: date | None = None
     valid_until: date | None = None
     source: str
+
+
+class SearchHit(BaseModel):
+    """Un chunk que encontró la búsqueda, con su puntaje: más alto, más relevante."""
+
+    chunk: Chunk
+    score: float
+
+
+class Citation(BaseModel):
+    """De dónde salió una respuesta: el documento y la sección del chunk que usó el modelo."""
+
+    source: str
+    section: str
+    chunk_id: str

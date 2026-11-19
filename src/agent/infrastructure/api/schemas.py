@@ -6,6 +6,7 @@ from uuid import UUID
 from pydantic import BaseModel, StringConstraints
 
 from agent.domain.errors import ErrorKind
+from agent.domain.knowledge import Citation
 from agent.domain.models import Intent, Usage
 
 UserMessage = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2000)]
@@ -26,6 +27,7 @@ class ChatResponse(BaseModel): #JP - Estructura del chat con usage y pydantic
     intent: Intent
     answer: str
     usage: Usage
+    citations: list[Citation] = []
 
 
 class ErrorResponse(BaseModel):

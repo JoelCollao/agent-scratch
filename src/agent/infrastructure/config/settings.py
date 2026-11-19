@@ -13,6 +13,11 @@ class AuthProvider(StrEnum):
     ENTRA_ID = "entra_id"
 
 
+class KnowledgeBaseKind(StrEnum):
+    LOCAL = "local"  # Qdrant en data/index/<dominio>
+    AZURE_SEARCH = "azure_search"  # el índice del equipo en Azure AI Search
+
+
 class _EnvSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=ENV_FILE, env_file_encoding="utf-8", extra="ignore")
 
@@ -41,10 +46,21 @@ class IngestSettings(_EnvSettings): #JP-S3 - INGESTA
     chunk_max_chars: int = Field(1500, ge=200) #JP-S3 class IngestSettings: las variables INGEST_*: dónde está el corpus, dónde escribir y el tamaño de chunk. Field(1500, ge=200) impide chunks demasiado chicos.
     batch_size: int = Field(16, ge=1) #JP-S3 - TAMAÑO DE ENVIADO DE CHUNCK DE 16
 
+class SearchSettings(_EnvSettings):
+    """Variables SEARCH_*: búsqueda en el corpus. endpoint e index solo se usan con KNOWLEDGE_BASE=azure_search."""
+
+    model_config = SettingsConfigDict(env_prefix="SEARCH_")
+
+    endpoint: str = ""  # https://<servicio>.search.windows.net
+    index: str = ""  # idx-team-NN
+    top_k: int = Field(5, ge=1, le=20)
+
 
 class Settings(_EnvSettings):
     # cada tema agrega su bloque: T2 ingest y search, T3 mcp, T4 cosmos y otel
     domain: str = "fraud"
     max_turns: int = Field(10, ge=1)
+    knowledge_base: KnowledgeBaseKind = KnowledgeBaseKind.LOCAL
     foundry: FoundrySettings = Field(default_factory=FoundrySettings)
-    ingest: IngestSettings = Field(default_factory=IngestSettings)
+    ingest: IngestSettings = Field(default_factory=IngestSettings)    
+    search: SearchSettings = Field(default_factory=SearchSettings)
