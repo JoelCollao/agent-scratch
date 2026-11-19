@@ -54,6 +54,41 @@ El mock de Foundry, el agente y el chat corren cada uno en su propia terminal. `
 
 El paso a paso de cada sesión (configuración, ejecución, pruebas y problemas frecuentes) está en el repo de labs del workshop.
 
+## Problemas de certificados con Azure AI Search
+
+Si aparece `CERTIFICATE_VERIFY_FAILED: unable to get local issuer certificate`, Python puede no reconocer un certificado que Windows sí considera confiable. En ese caso, usa `truststore` para consultar los certificados de Windows sin desactivar la validación HTTPS.
+
+Si configuraste `REQUESTS_CA_BUNDLE` con una ruta inexistente, elimina esa variable en la terminal donde ejecutarás los comandos:
+
+```powershell
+Remove-Item Env:REQUESTS_CA_BUNDLE -ErrorAction SilentlyContinue
+```
+
+### Problemas al publicar en AI Search
+
+Configura `SEARCH_ENDPOINT` y `SEARCH_INDEX` en `.env` con los valores de tu servicio. Necesitas una sesión de Azure CLI con permisos sobre el índice; si aún no iniciaste sesión, ejecuta `az login`.
+
+Para publicar los chunks previamente generados con `uv run ingest build`, usando la confianza de Windows:
+
+```powershell
+uv run --with truststore python -c "import truststore; truststore.inject_into_ssl(); from agent.infrastructure.ingestion.cli import main; main()" publish --target azure_search
+```
+
+### Levantar la aplicación con datos de AI Search
+
+Con `SEARCH_ENDPOINT` y `SEARCH_INDEX` configurados y el índice ya publicado, ejecuta en la terminal del servidor:
+
+```powershell
+$env:KNOWLEDGE_BASE = "azure_search"
+uv run --with truststore python -c "import truststore; truststore.inject_into_ssl(); import uvicorn; uvicorn.run('agent.infrastructure.bootstrap:create_app', factory=True)"
+```
+
+Al iniciar, la aplicación consulta Azure AI Search para comprobar que el índice tiene documentos. Un error de certificado en esa consulta impide el arranque.
+
+**Importante:** `truststore` se aplica solamente al proceso iniciado con cada comando. Usarlo al publicar no lo activa para el servidor. Estos comandos no modifican el código ni las dependencias declaradas del proyecto; `uv` proporciona `truststore` para la ejecución.
+
+Si el error persiste, será necesario revisar la cadena de certificados y la configuración de red. No desactives la verificación SSL.
+
 ## Arquitectura
 
 ```
