@@ -54,6 +54,59 @@ El mock de Foundry, el agente y el chat corren cada uno en su propia terminal. `
 
 El paso a paso de cada sesión (configuración, ejecución, pruebas y problemas frecuentes) está en el repo de labs del workshop.
 
+## Integración de un tag a una rama para empezar una sesión
+
+### 1. Preparar la rama del equipo
+
+Se empezó desde `main` actualizado. `origin` corresponde al repositorio del capitán y `upstream` al repositorio principal `https://github.com/NTTData-Academy/agent-scratch.git`.
+
+```powershell
+git fetch origin
+git fetch upstream --tags --force
+git switch -C equipo-12 t3-s7
+```
+
+Para publicar la rama del equipo se usó:
+
+```powershell
+git push origin equipo-12
+```
+
+Si la publicación es rechazada porque requiere reemplazar el historial remoto, la alternativa es:
+
+```powershell
+git push --force-with-lease origin equipo-12
+```
+
+**Precaución:** `fetch --tags --force` puede reemplazar tags locales y `switch -C` reposiciona la rama local `equipo-12` en el tag. `push --force-with-lease` puede reemplazar el historial remoto: coordínalo con el equipo y conserva cualquier trabajo necesario. El push normal se usa cuando Git permite la actualización, no simplemente porque no haya cambios locales.
+
+### 2. Crear la rama de cada integrante
+
+Cada integrante, también el capitán, crea su rama de sesión desde `equipo-NN` del repositorio del capitán:
+
+```powershell
+git fetch origin
+git switch -c s7_AIE_<CÓDIGO> origin/equipo-NN
+uv sync
+uv run pytest
+```
+
+Reemplaza `<CÓDIGO>` y `NN` antes de ejecutar. En esta sesión se usó:
+
+```powershell
+git fetch origin
+git switch -c s7_AIE_17JC origin/equipo-12
+uv sync
+uv run pytest
+```
+
+**Resultado obtenido:**
+
+- Se creó `s7_AIE_17JC` desde `origin/equipo-12`, con seguimiento de esa rama remota.
+- Se preparó `equipo-12` desde `t3-s7` y se publicó en `origin`; por eso la rama personal heredó el código del tag sin hacer un merge adicional.
+- `uv sync` preparó las dependencias del laboratorio.
+- `uv run pytest` terminó con **119 pruebas correctas y 5 omitidas en 36,77 segundos**.
+
 ## Arquitectura
 
 ```
