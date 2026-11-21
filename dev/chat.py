@@ -18,6 +18,16 @@ from http.client import HTTPResponse
 
 URL = os.environ.get("AGENT_URL", "http://127.0.0.1:8000").rstrip("/") + "/chat/stream"
 TOOL_STATUS = {"ok": "resultado", "error": "error", "pending_approval": "NO SE EJECUTA, pendiente de aprobación"}
+RESET = "\033[0m"
+GREEN = "\033[92m"
+CYAN = "\033[96m"
+PURPLE = "\033[95m"
+YELLOW = "\033[93m"
+ORANGE = "\033[38;5;208m"
+
+
+def colored(text: str, color: str) -> str:
+    return f"{color}{text}{RESET}" if sys.stdout.isatty() else text
 
 
 def send(message: str, session_id: str | None) -> str | None:
@@ -39,14 +49,14 @@ def send(message: str, session_id: str | None) -> str | None:
             match name:
                 case "tool_call":
                     arguments = ", ".join(f"{key}={value}" for key, value in data["arguments"].items())
-                    print(f"  → {data['name']}({arguments})", flush=True)
+                    print(colored(f"  → {data['name']}({arguments})", PURPLE), flush=True)
                 case "tool_result":
-                    print(f"    {TOOL_STATUS[data['status']]}: {data['content'][:160]}", flush=True)
+                    print(colored(f"    {TOOL_STATUS[data['status']]}: {data['content'][:160]}", PURPLE), flush=True)
                 case "intent":
-                    print(f"  Agente [{data['intent']}]: ", end="", flush=True)
+                    print(colored(f"  Agente [{data['intent']}]: ", CYAN), end="", flush=True)
                 case "delta":
                     first_text_ms = first_text_ms or milliseconds_since(sent_at)
-                    print(data["text"], end="", flush=True)
+                    print(colored(data["text"], CYAN), end="", flush=True)
                 case "end":
                     print()
                     show_end(data, first_text_ms, milliseconds_since(sent_at))
@@ -70,13 +80,13 @@ def read_events(response: HTTPResponse) -> Iterator[tuple[str, dict]]:
 
 def show_end(reply: dict, first_text_ms: int | None, total_ms: int) -> None:
     if citations := reply.get("citations"):
-        print("  Fuentes:")
+        print(colored("  Fuentes:", YELLOW))
         for number, citation in enumerate(citations, start=1):
-            print(f"   [{number}] {citation['source']} · {citation['section']}")
+            print(colored(f"   [{number}] {citation['source']} · {citation['section']}", YELLOW))
     usage = reply["usage"]
     first_text = f"primer texto en {first_text_ms} ms, " if first_text_ms else ""
-    print(f"  ({first_text}respuesta completa en {total_ms} ms, "
-          f"{usage['prompt_tokens']} tokens de entrada, {usage['completion_tokens']} de salida)")
+    print(colored(f"  ({first_text}respuesta completa en {total_ms} ms, "
+                  f"{usage['prompt_tokens']} tokens de entrada, {usage['completion_tokens']} de salida)", ORANGE))
 
 
 def show_error(status: int, reply: dict) -> None:
@@ -94,13 +104,19 @@ def milliseconds_since(start: float) -> int:
 
 def main() -> None:
     if len(sys.argv) > 1:
-        send(" ".join(sys.argv[1:]), None)
+        message = " ".join(sys.argv[1:])
+        print(colored(f"Tú: {message}", GREEN))
+        send(message, None)
         return
     print('Conversación con el agente. Escribe "nueva" para otra sesión o "salir" para terminar.')
     session_id = None
     while True:
         try:
-            message = input("Tú: ")
+            try:
+                message = input(f"{GREEN}Tú: " if sys.stdout.isatty() else "Tú: ")
+            finally:
+                if sys.stdout.isatty():
+                    print(RESET, end="", flush=True)
         except (EOFError, KeyboardInterrupt):
             break
         if message.strip().lower() == "salir":

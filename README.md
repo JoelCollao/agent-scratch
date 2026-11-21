@@ -119,3 +119,14 @@ devops/              contenedor y compose
 ```
 
 Las dependencias van `infrastructure → application → domain`, nunca al revés.
+
+Levantar la aplicación con datos de AI Search
+Con SEARCH_ENDPOINT y SEARCH_INDEX configurados y el índice ya publicado, ejecuta en la terminal del servidor:
+
+uv run --with truststore python -c "import truststore; truststore.inject_into_ssl(); import uvicorn; uvicorn.run('agent.infrastructure.bootstrap:create_app', factory=True)"
+
+### Chat de consola
+
+En otra terminal, ejecuta `uv run python dev/chat.py` (o `uv run python dev/chat.py "Hola"` para una sola consulta).
+La consulta aparece en verde, la respuesta y etiquetas como `[data_query]` en celeste, las tools en morado,
+las fuentes RAG en amarillo y los tiempos y tokens en naranja. Los colores se desactivan al redirigir la salida.
