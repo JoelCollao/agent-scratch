@@ -80,6 +80,14 @@ class McpSettings(_EnvSettings):
     url: str = "http://127.0.0.1:8200/mcp"  # el mock de dev/mcp; para el compartido, MCP_URL en el .env
     scope: str = ""  # vacío con el mock; el compartido pide un token de Entra: api://<app del MCP>/.default
 
+class CosmosSettings(_EnvSettings):
+    """Variables COSMOS_*: historial de las sesiones. Sin COSMOS_ENDPOINT, en memoria (se pierde al reiniciar)."""
+
+    model_config = SettingsConfigDict(env_prefix="COSMOS_")
+
+    endpoint: str = ""  #https://<cuenta>.documents.azure.com:443/
+    database: str = ""  # workshop
+    container: str = ""  # team-NN
 
 class Settings(_EnvSettings):
     # cada tema agrega su bloque: T2 ingest y search, T3 mcp, T4 cosmos y otel
@@ -92,3 +100,4 @@ class Settings(_EnvSettings):
     ingest: IngestSettings = Field(default_factory=IngestSettings)
     search: SearchSettings = Field(default_factory=SearchSettings)
     mcp: McpSettings = Field(default_factory=McpSettings)
+    cosmos: CosmosSettings = Field(default_factory=CosmosSettings)
