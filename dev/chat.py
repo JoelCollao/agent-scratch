@@ -4,7 +4,10 @@ uv run python dev/chat.py            conversación: escribe tus mensajes; "nueva
 uv run python dev/chat.py "Hola"     un solo mensaje y termina
 
 La respuesta aparece mientras el agente la escribe (POST /chat/stream, Server-Sent Events), y antes, cada tool que usa.
+Si el agente deja una acción sensible pendiente, la consola te pregunta como asesor si la apruebas (POST /chat/actions).
 AGENT_URL cambia la dirección del agente (por defecto http://127.0.0.1:8000).
+En una terminal los mensajes salen en colores ANSI (tú en verde, agente celeste, tools morado, fuentes amarillo,
+tiempos naranja); al redirigir la salida quedan sin color.
 """
 
 import json
@@ -16,8 +19,26 @@ import urllib.request
 from collections.abc import Iterator
 from http.client import HTTPResponse
 
-URL = os.environ.get("AGENT_URL", "http://127.0.0.1:8000").rstrip("/") + "/chat/stream"
-TOOL_STATUS = {"ok": "resultado", "error": "error", "pending_approval": "NO SE EJECUTA, pendiente de aprobación"}
+AGENT_URL = os.environ.get("AGENT_URL", "http://127.0.0.1:8000").rstrip("/")
+URL = AGENT_URL + "/chat/stream"
+TOOL_STATUS = {"ok": "resultado", "error": "error", "pending_approval": "NO SE EJECUTA, pendiente de aprobación",
+               "rejected": "rechazada por el asesor"}
+
+GREEN = "\033[92m"            # consulta y texto del usuario
+CYAN = "\033[96m"             # respuesta del agente
+PURPLE = "\033[95m"           # tools y sus resultados
+YELLOW = "\033[93m"           # fuentes RAG
+ORANGE = "\033[38;5;208m"     # tiempos y tokens (256 colores, soportado por la terminal de VS Code)
+RESET = "\033[0m"
+
+
+def color(code: str) -> str:
+    """Devuelve el código ANSI solo si la salida es una terminal; al redirigir a un archivo queda texto plano."""
+    return code if sys.stdout.isatty() else ""
+
+
+def paint(text: str, code: str) -> str:
+    return f"{color(code)}{text}{color(RESET)}"
 
 
 def send(message: str, session_id: str | None) -> str | None:
@@ -39,22 +60,50 @@ def send(message: str, session_id: str | None) -> str | None:
             match name:
                 case "tool_call":
                     arguments = ", ".join(f"{key}={value}" for key, value in data["arguments"].items())
-                    print(f"  → {data['name']}({arguments})", flush=True)
+                    print(paint(f"  → {data['name']}({arguments})", PURPLE), flush=True)
                 case "tool_result":
-                    print(f"    {TOOL_STATUS[data['status']]}: {data['content'][:160]}", flush=True)
+                    show_tool(data["status"], data["content"])
                 case "intent":
-                    print(f"  Agente [{data['intent']}]: ", end="", flush=True)
+                    print(paint(f"  Agente [{data['intent']}]: ", CYAN), end="", flush=True)
                 case "delta":
                     first_text_ms = first_text_ms or milliseconds_since(sent_at)
-                    print(data["text"], end="", flush=True)
+                    print(paint(data["text"], CYAN), end="", flush=True)
                 case "end":
                     print()
                     show_end(data, first_text_ms, milliseconds_since(sent_at))
+                    if action := data.get("pending_action"):
+                        decide(data["session_id"], action)
                     return data["session_id"]
                 case "error":
                     print()
                     show_error(200, data)
     return None
+
+
+def decide(session_id: str, action: dict) -> None:
+    """Haces de asesor: apruebas o rechazas la acción sensible, y el agente le cuenta al cliente qué pasó."""
+    arguments = ", ".join(f"{key}={value}" for key, value in action["arguments"].items())
+    prompt = paint(f"  Asesor: ¿apruebas {action['name']}({arguments})? [s/n]: ", PURPLE)
+    try:
+        answer = input(prompt + color(GREEN)).strip().lower()
+    finally:
+        print(color(RESET), end="", flush=True)
+    decision = "approve" if answer in ("s", "si", "sí") else "reject"
+    body = json.dumps({"session_id": session_id, "action_id": action["id"], "decision": decision}).encode("utf-8")
+    request = urllib.request.Request(AGENT_URL + "/chat/actions", data=body, headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(request, timeout=120) as response:
+            reply = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        show_error(error.code, json.loads(error.read().decode("utf-8")))
+        return
+    for tool in reply["tools"]:
+        show_tool(tool["status"], tool["content"])
+    print(paint(f"  Agente [{reply['intent']}]: {reply['answer']}", CYAN))
+
+
+def show_tool(status: str, content: str) -> None:
+    print(paint(f"    {TOOL_STATUS[status]}: {content[:160]}", PURPLE), flush=True)
 
 
 def read_events(response: HTTPResponse) -> Iterator[tuple[str, dict]]:
@@ -70,13 +119,13 @@ def read_events(response: HTTPResponse) -> Iterator[tuple[str, dict]]:
 
 def show_end(reply: dict, first_text_ms: int | None, total_ms: int) -> None:
     if citations := reply.get("citations"):
-        print("  Fuentes:")
+        print(paint("  Fuentes:", YELLOW))
         for number, citation in enumerate(citations, start=1):
-            print(f"   [{number}] {citation['source']} · {citation['section']}")
+            print(paint(f"   [{number}] {citation['source']} · {citation['section']}", YELLOW))
     usage = reply["usage"]
     first_text = f"primer texto en {first_text_ms} ms, " if first_text_ms else ""
-    print(f"  ({first_text}respuesta completa en {total_ms} ms, "
-          f"{usage['prompt_tokens']} tokens de entrada, {usage['completion_tokens']} de salida)")
+    print(paint(f"  ({first_text}respuesta completa en {total_ms} ms, "
+                f"{usage['prompt_tokens']} tokens de entrada, {usage['completion_tokens']} de salida)", ORANGE))
 
 
 def show_error(status: int, reply: dict) -> None:
@@ -94,15 +143,18 @@ def milliseconds_since(start: float) -> int:
 
 def main() -> None:
     if len(sys.argv) > 1:
-        send(" ".join(sys.argv[1:]), None)
+        message = " ".join(sys.argv[1:])
+        print(paint(f"Tú: {message}", GREEN))
+        send(message, None)
         return
     print('Conversación con el agente. Escribe "nueva" para otra sesión o "salir" para terminar.')
     session_id = None
     while True:
         try:
-            message = input("Tú: ")
+            message = input(f"{color(GREEN)}Tú: ")
         except (EOFError, KeyboardInterrupt):
             break
+        print(color(RESET), end="", flush=True)
         if message.strip().lower() == "salir":
             break
         if message.strip().lower() == "nueva":
@@ -110,6 +162,7 @@ def main() -> None:
             print("  (sesión nueva)")
             continue
         session_id = send(message, session_id) or session_id
+    print(color(RESET), end="", flush=True)  # nunca dejar la terminal en verde al salir
 
 
 if __name__ == "__main__":

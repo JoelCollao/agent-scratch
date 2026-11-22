@@ -20,6 +20,7 @@ from agent.infrastructure.config.settings import (
     KnowledgeBaseKind,
     McpSettings,
     Settings,
+    CosmosSettings,
 )
 from agent.infrastructure.evaluation.decision_judge import DecisionJudge
 from agent.infrastructure.evaluation.geval_judge import GEvalJudge
@@ -34,7 +35,12 @@ from agent.infrastructure.search.azure_search_knowledge_base import AzureSearchK
 from agent.infrastructure.search.qdrant_knowledge_base import QdrantKnowledgeBase
 from agent.infrastructure.skills.loader import load_skill
 
+from azure.cosmos import CosmosClient
+from agent.domain.ports import AgentRuntime, ConversationStore, Embedder, Judge, KnowledgeBase, Tools
+from agent.infrastructure.persistence.cosmos_store import CosmosConversationStore
+
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+logging.getLogger("azure").setLevel(logging.WARNING)  # el SDK registra cada petición HTTP con sus headers en INFO
 log = logging.getLogger(__name__)
 
 
@@ -105,6 +111,18 @@ def build_tools(mcp: McpSettings, domain: str) -> Tools | None:
     log.info("MCP: %s · %d tools: %s", mcp.url, len(definitions), ", ".join(tool.name for tool in definitions))
     return tools
 
+def build_store(cosmos: CosmosSettings) -> ConversationStore:
+    """Dónde vive el historial. Con COSMOS_ENDPOINT, en el contenedor del equipo (sobrevive a reinicios y despliegues); si no, en memoria."""
+    if not cosmos.endpoint:
+        log.info("Conversation store: memoria (se pierde al reiniciar)")
+        return InMemoryConversationStore()
+    if not (cosmos.database and cosmos.container):
+        raise RuntimeError("COSMOS_ENDPOINT requiere COSMOS_DATABASE y COSMOS_CONTAINER en .env.")
+    # sin claves: la cuenta solo acepta Entra ID (az login en local, Managed Identity desplegado)
+    client = CosmosClient(cosmos.endpoint, credential=DefaultAzureCredential())
+    container = client.get_database_client(cosmos.database).get_container_client(cosmos.container)
+    log.info("Conversation store: Cosmos DB %s/%s", cosmos.database, cosmos.container)
+    return CosmosConversationStore(container)
 
 def _mcp_hint(mcp: McpSettings) -> str:
     """Qué revisar cuando el MCP no responde. El cliente MCP no expone el código HTTP: se deduce de la configuración."""
@@ -156,7 +174,7 @@ def build_chat_service(
         rewriter=model,  # el mismo modelo de chat reescribe las preguntas de seguimiento
         embedder=embedder or build_embedder(settings.foundry),
         knowledge_base=knowledge_base or build_ready_knowledge_base(settings),
-        store=InMemoryConversationStore(),
+        store=InMemoryConversationStore() if chat_model else build_store(settings.cosmos),  # tests: nunca Cosmos
         system_prompt=load_prompt(settings.domain),
         max_turns=settings.max_turns,
         top_k=settings.search.top_k,
