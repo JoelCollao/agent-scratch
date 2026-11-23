@@ -21,9 +21,6 @@ dependencies = [
     { name = "pypdf" },
     { name = "python-docx" },
     { name = "qdrant-client" },
-    { name = "pypdf" },
-    { name = "python-docx" },
-    { name = "qdrant-client" },
     { name = "uvicorn" },
 ]
 
