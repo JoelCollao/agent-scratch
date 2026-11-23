@@ -435,3 +435,54 @@ En [`test_api.py`](tests/infrastructure/test_api.py), `Settings` se crea con `do
 se carga la skill de comisiones. La prueba inyecta un modelo, un embedder, una base de conocimiento y tools
 falsos. Al inyectar `chat_model`, el bootstrap utiliza ReAct en esa prueba, sin llamar al runtime de Agent
 Framework.
+
+
+## Sesión 9 — Despliegue en Azure
+
+Equipo: `team-11`. Dominio: `fraud`.
+
+| Comprobación | Resultado |
+|---|---|
+| Tests en el contenedor (paso 3) | **Correcto:** 144 pasaron y 5 se omitieron en el job `test` de GitHub Actions. Corresponden al commit desplegado, no necesariamente a los cambios locales posteriores. |
+| Acción aprobada después de reiniciar `uvicorn` (paso 2, Cosmos DB) | **Pendiente de verificar.** Hay pruebas unitarias con un contenedor falso, pero no evidencia de una aprobación real después de reiniciar el servidor con Cosmos DB. |
+| Imagen desplegada (`team-NN/agent:<sha>`) | `acrworkshopjsu3.azurecr.io/team-11/agent:897225ac1392eb2ccfc0457852897f8fc211ae65`. |
+| Revisión activa y duración del job `deploy` | `ca-agent-chat-11--0000004`: activa, saludable y con el 100 % del tráfico. El job `deploy` terminó correctamente en **2 min 31 s**. |
+| `/health` del agente desplegado | **Correcto:** respondió `ok` con autenticación de Entra ID. |
+| Respuesta con `Fuentes:` contra Azure (y su tiempo en ms) | **Correcto:** ante la pregunta sobre plazos para reclamar un cargo no reconocido, citó `claims-regulation.pdf` y `response-times.csv`. Respuesta completa: **6501 ms**; primer texto: **6384 ms**. |
+| Acción aprobada contra Azure, con su `resultado:` | **Pendiente de verificar.** No se ejecutó ni aprobó una acción sensible para esta comprobación, por lo que no hay un `resultado:` verificable. |
+
+Evidencia: [ejecución del workflow](https://github.com/JoelCollao/agent-scratch/actions/runs/45125428092),
+consultas de la Container App y prueba del chat realizadas el 23 de noviembre de 2026. La comprobación de
+arranque de la imagen en CI llegó a solicitar AI Search; la revisión desplegada se comprobó después como activa.
+
+### Qué pone Azure y qué pone la imagen
+
+**Azure / Terraform:** nombres observados en la configuración de la Container App:
+`APPLICATIONINSIGHTS_CONNECTION_STRING`, `AZURE_CLIENT_ID`, `AZURE_OPENAI_ENDPOINT`, `COSMOS_CONTAINER`,
+`COSMOS_DATABASE`, `COSMOS_ENDPOINT`, `FOUNDRY_PROJECT_ENDPOINT`, `KEY_VAULT_URI`, `MCP_SCOPE`, `MCP_URL`,
+`SEARCH_ENDPOINT`, `SEARCH_INDEX` y `TEAM_ID`.
+
+**Imagen:** [`devops/Dockerfile`](devops/Dockerfile) define `PATH`, `PYTHONUNBUFFERED`, `DOMAIN`,
+`FOUNDRY_AUTH_PROVIDER`, `KNOWLEDGE_BASE` y `AGENT_RUNTIME`. Al arrancar, también prepara `FOUNDRY_ENDPOINT`
+a partir de `AZURE_OPENAI_ENDPOINT` si es necesario. El workflow entrega `DOMAIN` durante la construcción.
+Las variables de la Container App pueden sobrescribir las de la imagen.
+
+### Problemas que encontraste y cómo los resolviste
+
+- **Autenticación del agente:** `/health` y `/chat/stream` devolvían `401` sin credenciales. El cliente usa
+  `DefaultAzureCredential` con el scope configurado y la sesión de `az login`; la comprobación autenticada respondió `ok`.
+- **Error TLS al consultar logs con Azure CLI:** el certificado del servicio de logs no era reconocido por el
+  almacén de la CLI en la máquina corporativa. Se usó un paquete que combina las CA de la CLI con las raíces
+  confiables de Windows, mediante `REQUESTS_CA_BUNDLE`, sin desactivar la verificación TLS.
+- **Consulta directa a Cosmos DB:** el usuario recibió `403` por falta de `readMetadata`; el acceso a la
+  infraestructura no implica acceso al plano de datos. **Pendiente:** que una identidad autorizada configure
+  los roles de datos y metadatos necesarios con el alcance apropiado.
+- **Servicio bancario MCP:** en una prueba anterior, `get_transactions` informó que el servicio del banco no
+  respondía. No hay evidencia posterior de que se haya resuelto.
+
+### Conclusión
+
+El pipeline construyó y publicó la imagen del equipo, y la revisión desplegada respondió con fuentes del
+dominio de fraude. Quedan pendientes las pruebas de aprobación tras reiniciar y contra Azure, así como la
+verificación de los permisos de Cosmos DB y del servicio MCP. No se debe concluir que esas acciones funcionan
+hasta contar con sus resultados.

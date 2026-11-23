@@ -6,6 +6,7 @@ uv run python dev/chat.py "Hola"     un solo mensaje y termina
 La respuesta aparece mientras el agente la escribe (POST /chat/stream, Server-Sent Events), y antes, cada tool que usa.
 Si el agente deja una acción sensible pendiente, la consola te pregunta como asesor si la apruebas (POST /chat/actions).
 AGENT_URL cambia la dirección del agente (por defecto http://127.0.0.1:8000).
+AGENT_SCOPE activa la autenticación con DefaultAzureCredential para el agente en Azure.
 En una terminal los mensajes salen en colores ANSI (tú en verde, agente celeste, tools morado, fuentes amarillo,
 tiempos naranja); al redirigir la salida quedan sin color.
 """
@@ -16,13 +17,16 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from http.client import HTTPResponse
 
 AGENT_URL = os.environ.get("AGENT_URL", "http://127.0.0.1:8000").rstrip("/")
+AGENT_SCOPE = os.environ.get("AGENT_SCOPE", "").strip()
 URL = AGENT_URL + "/chat/stream"
 TOOL_STATUS = {"ok": "resultado", "error": "error", "pending_approval": "NO SE EJECUTA, pendiente de aprobación",
                "rejected": "rechazada por el asesor"}
+AUTH_HINT = {401: "el agente pide un token: define AGENT_SCOPE con el scope de tu ficha y haz az login",
+             403: "acceso denegado: revisa los permisos y el grupo de tu equipo con plataforma"}
 
 GREEN = "\033[92m"            # consulta y texto del usuario
 CYAN = "\033[96m"             # respuesta del agente
@@ -30,6 +34,60 @@ PURPLE = "\033[95m"           # tools y sus resultados
 YELLOW = "\033[93m"           # fuentes RAG
 ORANGE = "\033[38;5;208m"     # tiempos y tokens (256 colores, soportado por la terminal de VS Code)
 RESET = "\033[0m"
+
+
+def token_provider() -> Callable[[], str] | None:
+    if not AGENT_SCOPE:
+        return None
+    from azure.identity import DefaultAzureCredential, get_bearer_token_provider
+
+    return get_bearer_token_provider(DefaultAzureCredential(), AGENT_SCOPE)
+
+
+TOKEN = token_provider()
+
+
+def headers() -> dict[str, str]:
+    result = {"Content-Type": "application/json"}
+    if TOKEN:
+        if not AGENT_URL.lower().startswith("https://"):
+            sys.exit("AGENT_SCOPE requiere una dirección AGENT_URL con HTTPS.")
+        from azure.core.exceptions import ClientAuthenticationError
+
+        try:
+            result["Authorization"] = f"Bearer {TOKEN()}"
+        except ClientAuthenticationError as error:
+            sys.exit(f"No se pudo obtener un token para {AGENT_SCOPE}: haz az login y revisa "
+                     f"que AGENT_SCOPE termine en /.default. {error}")
+    return result
+
+
+def check_health() -> None:
+    """Comprueba la conexión y la autenticación antes de iniciar la conversación."""
+    try:
+        request = urllib.request.Request(AGENT_URL + "/health", headers=headers())
+        with urllib.request.urlopen(request, timeout=30) as response:
+            status = json.loads(response.read().decode("utf-8"))["status"]
+    except urllib.error.HTTPError as error:
+        show_error(error.code, read_error(error))
+        sys.exit(1)
+    except TimeoutError:
+        sys.exit(f"El agente en {AGENT_URL} no respondió a tiempo al comprobar /health.")
+    except urllib.error.URLError:
+        sys.exit(f"No hay agente en {AGENT_URL}. ¿Lo levantaste con uvicorn en otra terminal, o es la URL de tu ficha?")
+    print(f"Agente en {AGENT_URL}: {status}")
+
+
+def read_error(error: urllib.error.HTTPError) -> dict:
+    """El agente devuelve JSON; los errores de autenticación de Azure pueden llegar sin cuerpo."""
+    raw = error.read().decode("utf-8", errors="replace")
+    try:
+        reply = json.loads(raw)
+    except json.JSONDecodeError:
+        reply = None
+    if isinstance(reply, dict):
+        return reply
+    return {"detail": AUTH_HINT.get(error.code, raw.strip() or str(error.reason))}
 
 
 def color(code: str) -> str:
@@ -44,12 +102,12 @@ def paint(text: str, code: str) -> str:
 def send(message: str, session_id: str | None) -> str | None:
     """Envía el mensaje, muestra la respuesta mientras llega y devuelve el session_id para el siguiente turno."""
     body = json.dumps({"message": message, "session_id": session_id}).encode("utf-8")
-    request = urllib.request.Request(URL, data=body, headers={"Content-Type": "application/json"})
+    request = urllib.request.Request(URL, data=body, headers=headers())
     sent_at = time.perf_counter()
     try:
         response = urllib.request.urlopen(request, timeout=120)
     except urllib.error.HTTPError as error:  # falló antes de empezar a responder: llega como HTTP normal
-        show_error(error.code, json.loads(error.read().decode("utf-8")))
+        show_error(error.code, read_error(error))
         return None
     except urllib.error.URLError:
         sys.exit(f"No hay agente en {URL}. ¿Lo levantaste con uvicorn en otra terminal?")
@@ -90,12 +148,12 @@ def decide(session_id: str, action: dict) -> None:
         print(color(RESET), end="", flush=True)
     decision = "approve" if answer in ("s", "si", "sí") else "reject"
     body = json.dumps({"session_id": session_id, "action_id": action["id"], "decision": decision}).encode("utf-8")
-    request = urllib.request.Request(AGENT_URL + "/chat/actions", data=body, headers={"Content-Type": "application/json"})
+    request = urllib.request.Request(AGENT_URL + "/chat/actions", data=body, headers=headers())
     try:
         with urllib.request.urlopen(request, timeout=120) as response:
             reply = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as error:
-        show_error(error.code, json.loads(error.read().decode("utf-8")))
+        show_error(error.code, read_error(error))
         return
     for tool in reply["tools"]:
         show_tool(tool["status"], tool["content"])
@@ -142,6 +200,7 @@ def milliseconds_since(start: float) -> int:
 
 
 def main() -> None:
+    check_health()
     if len(sys.argv) > 1:
         message = " ".join(sys.argv[1:])
         print(paint(f"Tú: {message}", GREEN))
