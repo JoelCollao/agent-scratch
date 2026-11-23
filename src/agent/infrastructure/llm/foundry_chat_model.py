@@ -1,20 +1,31 @@
+import json
 import logging
 import time
+from collections.abc import Iterator
+from typing import Any
 
-from azure.core.exceptions import ClientAuthenticationError
-from openai import (
-    APIError,
-    APITimeoutError,
-    ContentFilterFinishReasonError,
-    LengthFinishReasonError,
-    OpenAI,
-    RateLimitError,
-)
-from pydantic import ValidationError
+from jiter import from_json
+from openai import OpenAI
+from openai.types.chat import ParsedChatCompletion
+from pydantic import BaseModel
 
 from agent.domain.errors import AgentError, ErrorKind
-from agent.domain.models import AgentReply, Message, ModelResult, Usage
+from agent.domain.models import (
+    AgentReply,
+    AnswerDelta,
+    IntentDetected,
+    Message,
+    ModelEvent,
+    ModelResult,
+    RewriteResult,
+    SearchQuery,
+    ToolCall,
+    ToolDefinition,
+    ToolRequest,
+    Usage,
+)
 from agent.infrastructure.llm.credentials import Credential
+from agent.infrastructure.llm.errors import foundry_errors
 
 log = logging.getLogger(__name__)
 
@@ -22,7 +33,7 @@ log = logging.getLogger(__name__)
 #Método complete(messages): en la línea de chat.completions.parse(...) 
 #ves el request real. Luego revisa completion.choices[0].message.parsed para ver la respuesta ya validada y el objeto usage.
 class FoundryChatModel:
-    """Implementa el puerto ChatModel contra Microsoft Foundry (API v1 compatible con OpenAI)."""
+    """Implementa los puertos ChatModel y QueryRewriter contra Microsoft Foundry (API v1 compatible con OpenAI)."""
 
     def __init__(
         self,
@@ -42,36 +53,58 @@ class FoundryChatModel:
         )
         self.deployment = deployment
 
-    def complete(self, messages: list[Message]) -> ModelResult:
-        log.info("messages enviados al modelo: %s", messages)
-        start = time.perf_counter()
-        #JP
-        try:
-            completion = self.client.chat.completions.parse(
-                model=self.deployment, messages=messages, response_format=AgentReply
-            )
-        except APITimeoutError as error:
-            raise AgentError(ErrorKind.TIMEOUT, "Foundry no respondió a tiempo") from error
-        except RateLimitError as error:
-            raise AgentError(ErrorKind.RATE_LIMIT, "Foundry limitó las solicitudes (429)") from error
-        except LengthFinishReasonError as error:
-            raise AgentError(ErrorKind.INVALID_OUTPUT, "respuesta cortada por límite de tokens") from error
-        except ContentFilterFinishReasonError as error:
-            raise AgentError(ErrorKind.INVALID_OUTPUT, "respuesta bloqueada por el filtro de contenido") from error
-        except ValidationError as error:
-            raise AgentError(ErrorKind.INVALID_OUTPUT, "el modelo no devolvió el contrato esperado") from error
-        except ClientAuthenticationError as error:
-            raise AgentError(ErrorKind.UPSTREAM, "no se pudo obtener token de Entra ID (¿hiciste az login?)") from error
-        except APIError as error:
-            raise AgentError(ErrorKind.UPSTREAM, f"error de Foundry: {type(error).__name__}") from error
+    def complete(self, messages: list[Message], tools: list[ToolDefinition]) -> ModelResult | ToolRequest:
+        # ponytail: es stream sin mirar los pedazos; parse no sirve aquí porque exige tools strict y las del MCP no lo son
+        *_, last = self.stream(messages, tools)
+        return last
 
+    def rewrite(self, messages: list[Message]) -> RewriteResult:
+        search, usage = self.parse(messages, SearchQuery)
+        return RewriteResult(query=search.query, usage=usage)
+
+    def stream(self, messages: list[Message], tools: list[ToolDefinition]) -> Iterator[ModelEvent]:
+        start = time.perf_counter()
+        reply_stream = ReplyStream()
+        with foundry_errors(), self.client.chat.completions.stream(
+            model=self.deployment,
+            messages=messages,
+            response_format=AgentReply,
+            stream_options={"include_usage": True},  # sin esto, el consumo no llega en modo streaming
+            **({"tools": [_as_function(tool) for tool in tools]} if tools else {}),  # la API rechaza una lista vacía
+        ) as stream:
+            for event in stream:
+                if event.type != "content.delta":
+                    continue
+                yield from reply_stream.events(event.snapshot)
+            completion = stream.get_final_completion()
+        if tool_calls := completion.choices[0].message.tool_calls:  # pidió tools en vez de responder
+            calls = [
+                ToolCall(id=call.id, name=call.function.name, arguments=json.loads(call.function.arguments or "{}"))
+                for call in tool_calls
+            ]
+            yield ToolRequest(calls=calls, usage=self._usage(completion, start, "ToolRequest"))
+            return
+        reply, usage = self._parsed_and_usage(completion, start, AgentReply)
+        yield ModelResult(reply=reply, usage=usage)
+
+    def parse[Output: BaseModel](self, messages: list[Message], schema: type[Output]) -> tuple[Output, Usage]:
+        """Cualquier structured output: lo usan complete, rewrite y el juez G-Eval (S5)."""
+        start = time.perf_counter()
+        with foundry_errors():
+            completion = self.client.chat.completions.parse(
+                model=self.deployment, messages=messages, response_format=schema
+            )
+        return self._parsed_and_usage(completion, start, schema)
+
+    def _parsed_and_usage[Output: BaseModel](
+        self, completion: ParsedChatCompletion[Output], start: float, schema: type[Output]
+    ) -> tuple[Output, Usage]:
         message = completion.choices[0].message
         if message.parsed is None:
             raise AgentError(ErrorKind.INVALID_OUTPUT, f"el modelo no devolvió el contrato: {message.refusal or 'vacío'}")
+        return message.parsed, self._usage(completion, start, schema.__name__)
 
-        #JP-VER LA INTENCION QUE LLEGA DEL PROMPT DEL CLIENTE
-        log.info("intencion detectada=%s | mensaje del cliente=%r", message.parsed.intent, messages[-1]["content"])
-        
+    def _usage(self, completion: ParsedChatCompletion[Any], start: float, label: str) -> Usage:
         tokens = completion.usage
         
         #JP-usage es el registro de consumo de una llamada al modelo: cuántos tokens usó, cuánto tardó y qué modelo respondió. Viaja desde Foundry hasta tu cliente en chat.py.
@@ -82,5 +115,40 @@ class FoundryChatModel:
             prompt_tokens=tokens.prompt_tokens if tokens else 0,
             completion_tokens=tokens.completion_tokens if tokens else 0,
         )
-        log.info("llm %s", usage.model_dump())
-        return ModelResult(reply=message.parsed, usage=usage) #JP - Se empaqueta
+        log.info("llm %s %s", label, usage.model_dump())
+        return usage
+
+
+def _as_function(tool: ToolDefinition) -> dict[str, Any]:
+    """Una tool en el formato de Foundry: nombre, descripción y el JSON Schema de sus parámetros."""
+    return {"type": "function", "function": {"name": tool.name, "description": tool.description, "parameters": tool.parameters}}
+
+
+class ReplyStream:
+    """El AgentReply a medio escribir, convertido en eventos: IntentDetected una vez y cada pedazo nuevo de answer.
+
+    Lo usan FoundryChatModel y AgentFrameworkRuntime: los dos reciben el JSON de AgentReply mientras el modelo lo escribe.
+    """
+
+    def __init__(self) -> None:
+        self.intent_sent, self.answer_sent = False, ""
+
+    def events(self, snapshot: str) -> Iterator[IntentDetected | AnswerDelta]:
+        reply_so_far = partial_reply(snapshot)
+        # los campos llegan en el orden del schema: si ya empezó answer, intent está completo
+        if not self.intent_sent and "answer" in reply_so_far:
+            yield IntentDetected(intent=reply_so_far["intent"])
+            self.intent_sent = True
+        answer_so_far = reply_so_far.get("answer", "")
+        if len(answer_so_far) > len(self.answer_sent):
+            yield AnswerDelta(text=answer_so_far[len(self.answer_sent) :])
+            self.answer_sent = answer_so_far
+
+
+def partial_reply(snapshot: str) -> dict[str, Any]:
+    """El JSON a medio escribir, incluido el texto que todavía no se cerró: '{"answer": "Ho' → {"answer": "Ho"}."""
+    try:
+        reply = from_json(snapshot.encode(), partial_mode="trailing-strings")
+    except ValueError:  # todavía no llegó ni la primera llave
+        return {}
+    return reply if isinstance(reply, dict) else {}
