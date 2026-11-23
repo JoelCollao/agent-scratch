@@ -10,3 +10,6 @@ data/**
 evals/golden/*.jsonl
 !evals/golden/*.AIE_*.jsonl
 .jsonl
+
+# graphify-axet
+.graphify/

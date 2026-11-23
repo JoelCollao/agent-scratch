@@ -48,6 +48,17 @@ class FoundrySettings(_EnvSettings):
     max_retries: int = Field(2, ge=0)
 
 
+class IngestSettings(_EnvSettings): #JP-S3 - INGESTA
+    """Variables INGEST_*: ingesta del corpus. Todo vive bajo data/, que no se versiona."""
+
+    model_config = SettingsConfigDict(env_prefix="INGEST_")
+
+    corpus_dir: Path = ROOT / "data" / "corpus"
+    data_dir: Path = ROOT / "data"
+    chunk_max_chars: int = Field(1500, ge=200) #JP-S3 class IngestSettings: las variables INGEST_*: dónde está el corpus, dónde escribir y el tamaño de chunk. Field(1500, ge=200) impide chunks demasiado chicos.
+    batch_size: int = Field(16, ge=1) #JP-S3 - TAMAÑO DE ENVIADO DE CHUNCK DE 16
+
+
 class IngestSettings(_EnvSettings):
     """Variables INGEST_*: ingesta del corpus. Todo vive bajo data/, que no se versiona."""
 

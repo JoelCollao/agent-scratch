@@ -182,3 +182,115 @@ class FakeJudge:
     def evaluate(self, question: str, fragments: list[SearchHit], answer: str, cited: list[Citation]) -> Verdict:
         self.questions.append(question)
         return Verdict(groundedness=4, relevance=5, citation_correct=1.0, judge="fake")
+
+
+class InterruptedChatModel(FakeChatModel):
+    """Empieza a responder y se corta a la mitad, como una conexión que se cae."""
+
+    def stream(self, messages: list[Message], tools: list[ToolDefinition] = ()) -> Iterator[ModelEvent]:
+        yield IntentDetected(intent=Intent.PRODUCT_QUESTION)
+        yield AnswerDelta(text="El plazo es ")
+        raise AgentError(ErrorKind.UPSTREAM, "se cortó la respuesta")
+
+
+class ToolCallingChatModel(FakeChatModel):
+    """Pide las mismas tools durante `rounds` vueltas y después responde con el último resultado, como un modelo que consulta."""
+
+    def __init__(self, *calls: ToolCall, rounds: int = 1) -> None:
+        super().__init__()
+        self.tool_calls, self.rounds = list(calls), rounds
+        self.received: list[list[Message]] = []
+        self.offered: list[list[ToolDefinition]] = []  # las tools que el agente le ofreció en cada llamada
+
+    def complete(self, messages: list[Message], tools: list[ToolDefinition] = ()) -> ModelResult | ToolRequest:
+        self.received.append(list(messages))
+        self.offered.append(list(tools))
+        if len(self.received) <= self.rounds:
+            return ToolRequest(calls=self.tool_calls, usage=Usage(models=["fake"], llm_calls=1, prompt_tokens=20, completion_tokens=6))
+        reply = AgentReply(intent=Intent.DATA_QUERY, answer=f"[fake] la tool dijo: {messages[-1]['content']}", sources=[])
+        return ModelResult(reply=reply, usage=Usage(models=["fake"], llm_calls=1, prompt_tokens=30, completion_tokens=8))
+
+
+class FakeTools:
+    """Una consulta y una acción sensible del dominio fees. Anota qué tools se ejecutaron de verdad."""
+
+    DEFINITIONS = [
+        ToolDefinition(name="get_charged_fees", description="Comisiones cobradas al cliente.",
+                       parameters={"type": "object", "properties": {"customer_id": {"type": "string"}}}, sensitive=False),
+        ToolDefinition(name="request_fee_refund", description="Pide la devolución de una comisión.",
+                       parameters={"type": "object", "properties": {"fee_id": {"type": "string"}}}, sensitive=True),
+    ]
+
+    def __init__(self, definitions: list[ToolDefinition] | None = None) -> None:
+        self._definitions = self.DEFINITIONS if definitions is None else definitions
+        self.executed: list[str] = []
+
+    def definitions(self) -> list[ToolDefinition]:
+        return self._definitions
+
+    def call(self, call: ToolCall) -> ToolResult:
+        self.executed.append(call.name)
+        return ToolResult(call=call, status=ToolStatus.OK, content='{"result": [{"id": "FEE-4002", "refundable": true}]}')
+
+class FlakyTools(FakeTools):
+    """Falla por conexión las primeras `failures` llamadas, como un MCP que se está reiniciando."""
+
+    def __init__(self, failures: int) -> None:
+        super().__init__()
+        self.failures, self.attempts = failures, 0
+
+    def call(self, call: ToolCall) -> ToolResult:
+        self.attempts += 1
+        if self.attempts <= self.failures:
+            raise AgentError(ErrorKind.UPSTREAM, "no se pudo llamar al MCP: ConnectError")
+        return super().call(call)
+    
+class FakeEmbedder:
+    DIM = 8
+
+    def __init__(self) -> None:
+        self.calls: list[int] = []
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        self.calls.append(len(texts))
+        return [[float(len(text))] * self.DIM for text in texts]
+
+
+class FakeKnowledgeBase:
+    """Devuelve siempre los mismos chunks, en orden, y anota qué se buscó."""
+
+    def __init__(self, chunks: list[Chunk] | None = None) -> None:
+        self.chunks = chunks or []
+        self.queries: list[str] = []
+
+    def publish(self, chunks: list[Chunk]) -> None:
+        self.chunks = chunks
+
+    def count(self) -> int:
+        return len(self.chunks)
+
+    def search(self, text: str, vector: list[float], top_k: int) -> list[SearchHit]:
+        self.queries.append(text)
+        return [SearchHit(chunk=chunk, score=1.0) for chunk in self.chunks[:top_k]]
+
+
+class FakeJudge:
+    """Pone siempre la misma nota y anota qué preguntas calificó."""
+
+    def __init__(self) -> None:
+        self.questions: list[str] = []
+
+    def evaluate(self, question: str, fragments: list[SearchHit], answer: str, cited: list[Citation]) -> Verdict:
+        self.questions.append(question)
+        return Verdict(groundedness=4, relevance=5, citation_correct=1.0, judge="fake")
+
+
+class FakeEmbedder:
+    DIM = 8
+
+    def __init__(self) -> None:
+        self.calls: list[int] = []
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        self.calls.append(len(texts))
+        return [[float(len(text))] * self.DIM for text in texts]

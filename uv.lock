@@ -21,12 +21,14 @@ dependencies = [
     { name = "pypdf" },
     { name = "python-docx" },
     { name = "qdrant-client" },
+    { name = "pypdf" },
+    { name = "python-docx" },
+    { name = "qdrant-client" },
     { name = "uvicorn" },
 ]
 
 [package.dev-dependencies]
 dev = [
-    { name = "debugpy" },
     { name = "httpx" },
     { name = "pytest" },
 ]
@@ -52,7 +54,6 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "debugpy", specifier = ">=1.8.22" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "pytest", specifier = ">=8" },
 ]
