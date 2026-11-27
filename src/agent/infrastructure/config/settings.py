@@ -48,17 +48,6 @@ class FoundrySettings(_EnvSettings):
     max_retries: int = Field(2, ge=0)
 
 
-class IngestSettings(_EnvSettings): #JP-S3 - INGESTA
-    """Variables INGEST_*: ingesta del corpus. Todo vive bajo data/, que no se versiona."""
-
-    model_config = SettingsConfigDict(env_prefix="INGEST_")
-
-    corpus_dir: Path = ROOT / "data" / "corpus"
-    data_dir: Path = ROOT / "data"
-    chunk_max_chars: int = Field(1500, ge=200) #JP-S3 class IngestSettings: las variables INGEST_*: dónde está el corpus, dónde escribir y el tamaño de chunk. Field(1500, ge=200) impide chunks demasiado chicos.
-    batch_size: int = Field(16, ge=1) #JP-S3 - TAMAÑO DE ENVIADO DE CHUNCK DE 16
-
-
 class IngestSettings(_EnvSettings):
     """Variables INGEST_*: ingesta del corpus. Todo vive bajo data/, que no se versiona."""
 
@@ -91,14 +80,16 @@ class McpSettings(_EnvSettings):
     url: str = "http://127.0.0.1:8200/mcp"  # el mock de dev/mcp; para el compartido, MCP_URL en el .env
     scope: str = ""  # vacío con el mock; el compartido pide un token de Entra: api://<app del MCP>/.default
 
+
 class CosmosSettings(_EnvSettings):
     """Variables COSMOS_*: historial de las sesiones. Sin COSMOS_ENDPOINT, en memoria (se pierde al reiniciar)."""
 
     model_config = SettingsConfigDict(env_prefix="COSMOS_")
 
-    endpoint: str = ""  #https://<cuenta>.documents.azure.com:443/
+    endpoint: str = ""  # https://<cuenta>.documents.azure.com:443/
     database: str = ""  # workshop
     container: str = ""  # team-NN
+
 
 class Settings(_EnvSettings):
     # cada tema agrega su bloque: T2 ingest y search, T3 mcp, T4 cosmos y otel
@@ -107,6 +98,8 @@ class Settings(_EnvSettings):
     knowledge_base: KnowledgeBaseKind = KnowledgeBaseKind.LOCAL
     judge: JudgeKind = JudgeKind.LOCAL
     agent_runtime: AgentRuntimeKind = AgentRuntimeKind.REACT
+    # S10: el App Insights del equipo (Terraform la pone en la Container App). Vacía: sin telemetría
+    applicationinsights_connection_string: str = ""
     foundry: FoundrySettings = Field(default_factory=FoundrySettings)
     ingest: IngestSettings = Field(default_factory=IngestSettings)
     search: SearchSettings = Field(default_factory=SearchSettings)

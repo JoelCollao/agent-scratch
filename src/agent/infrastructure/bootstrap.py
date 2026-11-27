@@ -6,21 +6,23 @@ Arranque: uv run uvicorn agent.infrastructure.bootstrap:create_app --factory --r
 import logging
 from urllib.parse import urlparse
 
+from azure.cosmos import CosmosClient
 from azure.identity import DefaultAzureCredential, get_bearer_token_provider
+from azure.monitor.opentelemetry import configure_azure_monitor
 from fastapi import FastAPI
 
 from agent.application.chat_service import ChatService
 from agent.domain.errors import AgentError
-from agent.domain.ports import AgentRuntime, Embedder, Judge, KnowledgeBase, Tools
+from agent.domain.ports import AgentRuntime, ConversationStore, Embedder, Judge, KnowledgeBase, Tools
 from agent.infrastructure.api.routes import agent_error_handler, build_router
 from agent.infrastructure.config.settings import (
     AgentRuntimeKind,
+    CosmosSettings,
     FoundrySettings,
     JudgeKind,
     KnowledgeBaseKind,
     McpSettings,
     Settings,
-    CosmosSettings,
 )
 from agent.infrastructure.evaluation.decision_judge import DecisionJudge
 from agent.infrastructure.evaluation.geval_judge import GEvalJudge
@@ -29,15 +31,12 @@ from agent.infrastructure.llm.credentials import build_credential
 from agent.infrastructure.llm.foundry_chat_model import FoundryChatModel
 from agent.infrastructure.llm.foundry_embedder import FoundryEmbedder
 from agent.infrastructure.mcp.mcp_tools import McpTools
+from agent.infrastructure.persistence.cosmos_store import CosmosConversationStore
 from agent.infrastructure.persistence.in_memory_store import InMemoryConversationStore
 from agent.infrastructure.prompts.loader import load_prompt
 from agent.infrastructure.search.azure_search_knowledge_base import AzureSearchKnowledgeBase
 from agent.infrastructure.search.qdrant_knowledge_base import QdrantKnowledgeBase
 from agent.infrastructure.skills.loader import load_skill
-
-from azure.cosmos import CosmosClient
-from agent.domain.ports import AgentRuntime, ConversationStore, Embedder, Judge, KnowledgeBase, Tools
-from agent.infrastructure.persistence.cosmos_store import CosmosConversationStore
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 logging.getLogger("azure").setLevel(logging.WARNING)  # el SDK registra cada petición HTTP con sus headers en INFO
@@ -111,6 +110,7 @@ def build_tools(mcp: McpSettings, domain: str) -> Tools | None:
     log.info("MCP: %s · %d tools: %s", mcp.url, len(definitions), ", ".join(tool.name for tool in definitions))
     return tools
 
+
 def build_store(cosmos: CosmosSettings) -> ConversationStore:
     """Dónde vive el historial. Con COSMOS_ENDPOINT, en el contenedor del equipo (sobrevive a reinicios y despliegues); si no, en memoria."""
     if not cosmos.endpoint:
@@ -123,6 +123,21 @@ def build_store(cosmos: CosmosSettings) -> ConversationStore:
     container = client.get_database_client(cosmos.database).get_container_client(cosmos.container)
     log.info("Conversation store: Cosmos DB %s/%s", cosmos.database, cosmos.container)
     return CosmosConversationStore(container)
+
+
+def configure_telemetry(settings: Settings) -> bool:
+    """S10: trazas y logs del agente al App Insights del equipo. Va antes de crear la app: así se instrumenta FastAPI."""
+    if not settings.applicationinsights_connection_string:
+        log.info("Telemetría: apagada (sin APPLICATIONINSIGHTS_CONNECTION_STRING)")
+        return False
+    configure_azure_monitor(
+        connection_string=settings.applicationinsights_connection_string,
+        credential=DefaultAzureCredential(),  # la identidad del equipo tiene Monitoring Metrics Publisher: sin la llave
+        logger_name="agent",  # solo los logs del agente (la trayectoria de cada turno), no los de cada librería
+    )
+    log.info("Telemetría: App Insights del equipo")
+    return True
+
 
 def _mcp_hint(mcp: McpSettings) -> str:
     """Qué revisar cuando el MCP no responde. El cliente MCP no expone el código HTTP: se deduce de la configuración."""
@@ -192,6 +207,8 @@ def create_app(
     tools: Tools | None = None,
 ) -> FastAPI:
     settings = settings or Settings()
+    if chat_model is None:  # tests: nunca telemetría
+        configure_telemetry(settings)
     chat_service = build_chat_service(settings, chat_model, embedder, knowledge_base, tools)
     app = FastAPI(title=f"agent-{settings.domain}")
     app.include_router(build_router(chat_service))
