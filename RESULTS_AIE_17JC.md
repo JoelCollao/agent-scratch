@@ -486,3 +486,37 @@ El pipeline construyó y publicó la imagen del equipo, y la revisión desplegad
 dominio de fraude. Quedan pendientes las pruebas de aprobación tras reiniciar y contra Azure, así como la
 verificación de los permisos de Cosmos DB y del servicio MCP. No se debe concluir que esas acciones funcionan
 hasta contar con sus resultados.
+
+## Sesión 10 — Despliegue en Azure
+
+## Sesión 10 — Trazas por turno y dashboard
+
+Equipo: `team-11`. App Insights: `appi-team-11`. Evidencia del agente desplegado, rango de las últimas 24 horas.
+
+Las capturas muestran el total de tokens por turno, pero no el desglose individual entre entrada y salida. Se conserva el total y se indica esa limitación en la tabla.
+
+| Caso | `operation_Id` | Latencia (ms) | Tokens de entrada | Tokens de salida | Tools | Error | Observaciones |
+|---|---|---:|---|---|---|---|---|
+| Saludo | `c866ad4f9eb2051ed75f6262e4ba6fcd` | 13.821 | No desglosado | No desglosado | — | No | Turno exitoso, intención `greeting`; **1.776 tokens totales**. |
+| Consulta con retrieval | `4f0f97c3d530108136636e8c03417cb` | 15.823 | No desglosado | No desglosado | — | No | Turno exitoso, intención `product_question`; **3.784 tokens totales**. |
+| Llamada a tool | `09bb9a6c9347471ac807a5177d3131bb` | 35.336 | No desglosado | No desglosado | `get_transactions`: error | Fallo de tool | **4.465 tokens totales**. El turno aparece exitoso, pero el span de `get_transactions` falló y duró 10.735 ms. |
+| Error (upstream; no se confirma que fuera controlado) | `7c7f8cc22c2bfd9a0b8dc052bfd21859` | 28.892 | No consta | No consta | — | `upstream` | Turno fallido y sin intención; la captura permite localizar la operación, pero no identificar la causa raíz. |
+
+La captura no proporciona el desglose individual de tokens de entrada y salida. También se observó una llamada exitosa a `get_transactions` de 768 ms, asociada al turno `a8e4bc6bbf32b1bd204931a04051abe`.
+
+### Lo que dice el workbook
+
+| Panel | Lo que viste |
+|---|---|
+| Latencia p95 por intención | `sensitive_action`: **35.336 ms** (p50: 28.608 ms); sin intención: **28.892 ms**; `greeting`: **15.944 ms** (p50: 13.821 ms); `product_question`: **15.823 ms**. |
+| Tokens por turno | Promedio: **3.052**; p95: **5.742**. Entrada en caché: **70,7 %**; salida en razonamiento: **69,9 %**. El promedio de llamadas al modelo es **1,63**. El costo promedio figura como `NaN` y el costo total como `0`; la captura no muestra costos calculados. |
+| Dónde se va el tiempo de un turno | El mayor p95 corresponde a `sensitive_action` (**35.336 ms**). El span fallido de `get_transactions` duró **10.735 ms** (p50 de la tool: **1.121 ms**). |
+| Tools con error | `get_transactions`: **3 llamadas**, **1 fallo** (**33,3 %**), p50 **1.121 ms** y p95 **10.735 ms**. Espera de asesor: **0**; aprobaciones: **0**; rechazos: **0**. El resumen muestra **8 turnos**, **1 turno con error** y **1 tool fallida**. |
+
+### ¿Qué optimizarías primero y por qué?
+
+Primero investigaría el fallo y la latencia p95 de `get_transactions`: falló **1 de 3** llamadas y el span fallido tardó **10.735 ms**. Revisaría la dependencia upstream y el manejo de errores, y comprobaría que existan límites de espera y reintentos controlados. Después analizaría la latencia p95 de `sensitive_action` (**35.336 ms**). No priorizaría el costo hasta disponer de una medición calculada en el workbook.
+
+### Conclusión
+
+Las capturas muestran que el agente procesó ocho turnos en el periodo y permiten observar latencias, consumo de tokens y fallos. El principal punto de atención es `get_transactions`, con un fallo de tres llamadas, además de la latencia elevada de `sensitive_action`. No se observan aprobaciones de acciones. El error `upstream` se puede ubicar por `operation_Id`, pero la evidencia no confirma que fuera controlado ni determina su causa raíz. Para completar los tokens por operación y evaluar costos, se necesita el desglose de las trazas y una medición de costos disponible.
